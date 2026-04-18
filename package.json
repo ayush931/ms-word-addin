@@ -1,0 +1,11 @@
+{
+  "name": "msword-writing-assistant",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A Microsoft Word add-in for grammar and spelling review.",
+  "scripts": {
+    "start": "python -m http.server 3000",
+    "validate:manifest": "npx office-addin-manifest validate manifest.xml"
+  },
+  "devDependencies": {}
+}
