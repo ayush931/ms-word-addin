@@ -7,6 +7,7 @@ const state = {
 };
 
 const els = {};
+let fallbackId = 0;
 
 Office.onReady(() => {
   bindElements();
@@ -23,6 +24,8 @@ function bindElements() {
   els.emptyState = document.getElementById("emptyState");
   els.onlineToggle = document.getElementById("onlineToggle");
   els.languageSelect = document.getElementById("languageSelect");
+  els.acceptVisibleButton = document.getElementById("acceptVisibleButton");
+  els.dismissVisibleButton = document.getElementById("dismissVisibleButton");
   els.tabs = Array.from(document.querySelectorAll(".tab"));
   els.counts = {
     all: document.getElementById("allCount"),
@@ -33,6 +36,13 @@ function bindElements() {
 
 function bindEvents() {
   els.scanButton.addEventListener("click", scanDocument);
+  els.acceptVisibleButton.addEventListener("click", acceptVisibleSuggestions);
+  els.dismissVisibleButton.addEventListener("click", dismissVisibleSuggestions);
+  els.languageSelect.addEventListener("change", () => {
+    if (state.suggestions.length) {
+      setStatus("Language changed. Scan again to refresh suggestions.");
+    }
+  });
   els.tabs.forEach((tab) => {
     tab.addEventListener("click", () => {
       state.activeFilter = tab.dataset.filter;
@@ -50,8 +60,15 @@ async function scanDocument() {
   setStatus("Reading document paragraphs...");
 
   try {
+    await clearHighlightsForSuggestions(state.suggestions);
     const paragraphs = await readParagraphs();
     const usableParagraphs = paragraphs.filter((paragraph) => paragraph.text.trim().length > 0);
+
+    if (!usableParagraphs.length) {
+      state.suggestions = [];
+      setStatus("No text found in this document.");
+      return;
+    }
 
     setStatus(`Checking ${usableParagraphs.length} paragraph${usableParagraphs.length === 1 ? "" : "s"}...`);
 
@@ -70,9 +87,11 @@ async function scanDocument() {
       return a.offset - b.offset;
     });
 
+    await highlightSuggestionsInDocument(state.suggestions);
+
     setStatus(
       state.suggestions.length
-        ? `${state.suggestions.length} suggestion${state.suggestions.length === 1 ? "" : "s"} found.`
+        ? `${state.suggestions.length} suggestion${state.suggestions.length === 1 ? "" : "s"} found and highlighted.`
         : "No grammar or spelling suggestions found."
     );
   } catch (error) {
@@ -132,7 +151,7 @@ function fromLanguageToolMatch(paragraph, match) {
   const replacement = match.replacements?.[0]?.value || "";
 
   return {
-    id: crypto.randomUUID(),
+    id: createId(),
     paragraphIndex: paragraph.paragraphIndex,
     paragraphText: paragraph.text,
     offset: match.offset,
@@ -152,10 +171,14 @@ function runLocalChecks(paragraph) {
     ...findRegexIssues(paragraph, /\b(seperate|seperated|seperately)\b/gi, "spelling", "Possible spelling mistake.", ["separate"]),
     ...findRegexIssues(paragraph, /\b(definately)\b/gi, "spelling", "Possible spelling mistake.", ["definitely"]),
     ...findRegexIssues(paragraph, /\b(alot)\b/gi, "spelling", "Possible spelling mistake.", ["a lot"]),
+    ...findRegexIssues(paragraph, / {2,}/g, "grammar", "Use one space.", [" "]),
     ...findRegexIssues(paragraph, /\b(is|are|was|were)\s+\1\b/gi, "grammar", "Repeated verb.", ["$1"]),
     ...findRegexIssues(paragraph, /\b(\w+)\s+\1\b/gi, "grammar", "Repeated word.", ["$1"]),
     ...findRegexIssues(paragraph, /\b(i)\b/g, "grammar", "Capitalize the pronoun.", ["I"]),
     ...findRegexIssues(paragraph, /\s+([,.!?;:])/g, "grammar", "Remove the space before punctuation.", ["$1"]),
+    ...findRegexIssues(paragraph, /([!?]){2,}/g, "grammar", "Use one punctuation mark.", ["$1"]),
+    ...findRegexIssues(paragraph, /([,;:!?])(?=\S)/g, "grammar", "Add a space after punctuation.", ["$1 "]),
+    ...findRegexIssues(paragraph, /([A-Za-z]{3,}\.)(?=[A-Z][a-z])/g, "grammar", "Add a space after the period.", ["$1 "]),
   ];
 
   return checks;
@@ -168,7 +191,7 @@ function findRegexIssues(paragraph, regex, type, message, replacements) {
   while ((match = regex.exec(paragraph.text)) !== null) {
     const replacementValues = replacements.map((replacement) => replacement.replace("$1", match[1] || ""));
     issues.push({
-      id: crypto.randomUUID(),
+      id: createId(),
       paragraphIndex: paragraph.paragraphIndex,
       paragraphText: paragraph.text,
       offset: match.index,
@@ -240,9 +263,88 @@ async function replaceSuggestionText(suggestion) {
       throw new Error("The original text was not found. Scan again.");
     }
 
+    target.font.highlightColor = null;
     target.insertText(suggestion.selectedReplacement, Word.InsertLocation.replace);
     await context.sync();
   });
+}
+
+async function highlightSuggestionsInDocument(suggestions) {
+  if (!suggestions.length) {
+    return;
+  }
+
+  try {
+    await Word.run(async (context) => {
+      const paragraphs = context.document.body.paragraphs;
+      paragraphs.load("items");
+      await context.sync();
+
+      for (const suggestion of suggestions) {
+        const paragraph = paragraphs.items[suggestion.paragraphIndex];
+        const originalText = getOriginalText(suggestion);
+        if (!paragraph || !originalText) {
+          continue;
+        }
+
+        const matches = paragraph.search(originalText, {
+          matchCase: true,
+          matchWholeWord: false,
+        });
+        matches.load("items");
+        await context.sync();
+
+        const occurrenceIndex = countOccurrencesBefore(suggestion.paragraphText, originalText, suggestion.offset);
+        const target = matches.items[occurrenceIndex] || matches.items[0];
+        if (target) {
+          target.font.highlightColor = "Yellow";
+        }
+      }
+
+      await context.sync();
+    });
+  } catch (error) {
+    console.warn("Could not highlight suggestions in the document.", error);
+  }
+}
+
+async function clearHighlightsForSuggestions(suggestions) {
+  if (!suggestions.length) {
+    return;
+  }
+
+  try {
+    await Word.run(async (context) => {
+      const paragraphs = context.document.body.paragraphs;
+      paragraphs.load("items");
+      await context.sync();
+
+      for (const suggestion of suggestions) {
+        const paragraph = paragraphs.items[suggestion.paragraphIndex];
+        const originalText = getOriginalText(suggestion);
+        if (!paragraph || !originalText) {
+          continue;
+        }
+
+        const matches = paragraph.search(originalText, {
+          matchCase: true,
+          matchWholeWord: false,
+        });
+        matches.load("items");
+        await context.sync();
+
+        const occurrenceIndex = countOccurrencesBefore(suggestion.paragraphText, originalText, suggestion.offset);
+        const target = matches.items[occurrenceIndex] || matches.items[0];
+        if (target) {
+          target.font.highlightColor = null;
+        }
+      }
+
+      await context.sync();
+    });
+  } catch (error) {
+    console.warn("Could not clear suggestion highlights.", error);
+  }
 }
 
 function countOccurrencesBefore(text, searchText, offset) {
@@ -260,7 +362,26 @@ function countOccurrencesBefore(text, searchText, offset) {
 }
 
 function dismissSuggestion(id) {
+  const suggestion = state.suggestions.find((item) => item.id === id);
+  if (suggestion) {
+    clearHighlightsForSuggestions([suggestion]);
+  }
   state.suggestions = state.suggestions.filter((suggestion) => suggestion.id !== id);
+  render();
+}
+
+async function acceptVisibleSuggestions() {
+  const visible = getVisibleSuggestions();
+  for (const suggestion of visible) {
+    await acceptSuggestion(suggestion.id);
+  }
+}
+
+async function dismissVisibleSuggestions() {
+  const visible = getVisibleSuggestions();
+  await clearHighlightsForSuggestions(visible);
+  state.suggestions = state.suggestions.filter((suggestion) => !visible.some((item) => item.id === suggestion.id));
+  setStatus(`${visible.length} suggestion${visible.length === 1 ? "" : "s"} dismissed.`);
   render();
 }
 
@@ -273,6 +394,10 @@ function render() {
   els.tabs.forEach((tab) => {
     tab.classList.toggle("active", tab.dataset.filter === state.activeFilter);
   });
+
+  const visible = getVisibleSuggestions();
+  els.acceptVisibleButton.disabled = state.scanning || visible.length === 0;
+  els.dismissVisibleButton.disabled = state.scanning || visible.length === 0;
 
   renderScore(counts.all);
   renderSuggestions();
@@ -291,9 +416,7 @@ function renderScore(total) {
 }
 
 function renderSuggestions() {
-  const visible = state.suggestions.filter((suggestion) => {
-    return state.activeFilter === "all" || suggestion.type === state.activeFilter;
-  });
+  const visible = getVisibleSuggestions();
 
   els.suggestionList.innerHTML = "";
   els.emptyState.classList.toggle("hidden", visible.length > 0);
@@ -303,6 +426,12 @@ function renderSuggestions() {
     fragment.appendChild(createSuggestionCard(suggestion));
   });
   els.suggestionList.appendChild(fragment);
+}
+
+function getVisibleSuggestions() {
+  return state.suggestions.filter((suggestion) => {
+    return state.activeFilter === "all" || suggestion.type === state.activeFilter;
+  });
 }
 
 function createSuggestionCard(suggestion) {
@@ -409,4 +538,17 @@ function normalizeWordText(text) {
 
 function capitalize(value) {
   return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function getOriginalText(suggestion) {
+  return suggestion.paragraphText.slice(suggestion.offset, suggestion.offset + suggestion.length);
+}
+
+function createId() {
+  if (window.crypto?.randomUUID) {
+    return window.crypto.randomUUID();
+  }
+
+  fallbackId += 1;
+  return `suggestion-${Date.now()}-${fallbackId}`;
 }
