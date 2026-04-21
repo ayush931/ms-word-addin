@@ -1,9 +1,17 @@
 const LANGUAGE_TOOL_ENDPOINT = "https://api.languagetool.org/v2/check";
+const PROGRESSIVE_RENDER_CHUNK_SIZE = 50;
+const SCAN_BATCH_SIZE = PROGRESSIVE_RENDER_CHUNK_SIZE;
+const SUGGESTIONS_PAGE_SIZE = 50;
+const LANGUAGE_TOOL_CONCURRENCY = 4;
+const LOCAL_SCAN_CONCURRENCY = Math.max(1, Math.min(8, Math.floor((window.navigator?.hardwareConcurrency || 4) / 2)));
 
 const state = {
   suggestions: [],
   activeFilter: "all",
+  currentPage: 1,
   scanning: false,
+  scanProgress: null,
+  latestSuggestionId: null,
 };
 
 const els = {};
@@ -13,6 +21,8 @@ Office.onReady(() => {
   bindElements();
   bindEvents();
   render();
+  setStatus("Opening document and scanning...");
+  void scanDocument();
 });
 
 function bindElements() {
@@ -20,6 +30,14 @@ function bindElements() {
   els.statusText = document.getElementById("statusText");
   els.scoreValue = document.getElementById("scoreValue");
   els.scoreLabel = document.getElementById("scoreLabel");
+  els.scanProgress = document.getElementById("scanProgress");
+  els.scanProgressText = document.getElementById("scanProgressText");
+  els.scanProgressPercent = document.getElementById("scanProgressPercent");
+  els.scanProgressBar = document.getElementById("scanProgressBar");
+  els.pagination = document.getElementById("pagination");
+  els.prevPageButton = document.getElementById("prevPageButton");
+  els.nextPageButton = document.getElementById("nextPageButton");
+  els.pageInfo = document.getElementById("pageInfo");
   els.suggestionList = document.getElementById("suggestionList");
   els.emptyState = document.getElementById("emptyState");
   els.onlineToggle = document.getElementById("onlineToggle");
@@ -38,6 +56,12 @@ function bindEvents() {
   els.scanButton.addEventListener("click", scanDocument);
   els.acceptVisibleButton.addEventListener("click", acceptVisibleSuggestions);
   els.dismissVisibleButton.addEventListener("click", dismissVisibleSuggestions);
+  els.prevPageButton.addEventListener("click", () => {
+    setPage(state.currentPage - 1);
+  });
+  els.nextPageButton.addEventListener("click", () => {
+    setPage(state.currentPage + 1);
+  });
   els.languageSelect.addEventListener("change", () => {
     if (state.suggestions.length) {
       setStatus("Language changed. Scan again to refresh suggestions.");
@@ -46,6 +70,7 @@ function bindEvents() {
   els.tabs.forEach((tab) => {
     tab.addEventListener("click", () => {
       state.activeFilter = tab.dataset.filter;
+      state.currentPage = 1;
       render();
     });
   });
@@ -57,37 +82,61 @@ async function scanDocument() {
   }
 
   setScanning(true);
+  state.scanProgress = null;
   setStatus("Reading document paragraphs...");
 
   try {
     await clearHighlightsForSuggestions(state.suggestions);
+    state.suggestions = [];
+    state.activeFilter = "all";
+    state.currentPage = 1;
+    state.latestSuggestionId = null;
+    render();
+
     const paragraphs = await readParagraphs();
     const usableParagraphs = paragraphs.filter((paragraph) => paragraph.text.trim().length > 0);
 
     if (!usableParagraphs.length) {
-      state.suggestions = [];
       setStatus("No text found in this document.");
       return;
     }
 
+    state.scanProgress = {
+      current: 0,
+      total: usableParagraphs.length,
+    };
+    render();
+
     setStatus(`Checking ${usableParagraphs.length} paragraph${usableParagraphs.length === 1 ? "" : "s"}...`);
 
-    const batches = await Promise.all(
-      usableParagraphs.map(async (paragraph) => {
-        const remote = els.onlineToggle.checked ? await checkWithLanguageTool(paragraph) : [];
-        const local = runLocalChecks(paragraph);
-        return mergeSuggestions(remote, local);
-      })
-    );
+    const suggestions = [];
 
-    state.suggestions = batches.flat().sort((a, b) => {
-      if (a.paragraphIndex !== b.paragraphIndex) {
-        return a.paragraphIndex - b.paragraphIndex;
+    for (let start = 0; start < usableParagraphs.length; start += SCAN_BATCH_SIZE) {
+      const batch = usableParagraphs.slice(start, start + SCAN_BATCH_SIZE);
+      const batchSuggestions = [];
+
+      await scanParagraphBatch(batch, async (paragraphSuggestions) => {
+        state.scanProgress.current += 1;
+        setStatus(`Checking paragraphs ${state.scanProgress.current} of ${state.scanProgress.total}...`);
+
+        if (paragraphSuggestions.length) {
+          batchSuggestions.push(...paragraphSuggestions);
+          suggestions.push(...paragraphSuggestions);
+          publishSuggestions(suggestions, paragraphSuggestions[paragraphSuggestions.length - 1].id);
+        }
+      });
+
+      await yieldToBrowser();
+
+      publishSuggestions(suggestions, getLastSuggestionId(batchSuggestions) || state.latestSuggestionId);
+      await yieldToBrowser();
+
+      if (batchSuggestions.length) {
+        await highlightSuggestionsInDocument(batchSuggestions);
       }
-      return a.offset - b.offset;
-    });
 
-    await highlightSuggestionsInDocument(state.suggestions);
+      await yieldToBrowser();
+    }
 
     setStatus(
       state.suggestions.length
@@ -98,9 +147,49 @@ async function scanDocument() {
     console.error(error);
     setStatus(error.message || "Unable to scan this document.");
   } finally {
+    state.scanProgress = null;
     setScanning(false);
     render();
   }
+}
+
+async function scanParagraphBatch(paragraphs, onParagraphScanned = null) {
+  const concurrency = els.onlineToggle.checked ? LANGUAGE_TOOL_CONCURRENCY : LOCAL_SCAN_CONCURRENCY;
+
+  return mapWithConcurrency(paragraphs, concurrency, async (paragraph) => {
+    const local = runLocalChecks(paragraph);
+    const remote = els.onlineToggle.checked ? await checkWithLanguageTool(paragraph) : [];
+    const suggestions = mergeSuggestions(remote, local);
+
+    if (onParagraphScanned) {
+      await onParagraphScanned(suggestions, paragraph);
+    }
+
+    return suggestions;
+  });
+}
+
+function publishSuggestions(suggestions, latestSuggestionId = null) {
+  suggestions.sort((a, b) => {
+    if (a.paragraphIndex !== b.paragraphIndex) {
+      return a.paragraphIndex - b.paragraphIndex;
+    }
+    return a.offset - b.offset;
+  });
+
+  state.suggestions = suggestions.slice();
+  if (latestSuggestionId) {
+    state.latestSuggestionId = latestSuggestionId;
+  }
+  render();
+}
+
+function getLastSuggestionId(suggestions) {
+  if (!suggestions.length) {
+    return null;
+  }
+
+  return suggestions[suggestions.length - 1].id;
 }
 
 async function readParagraphs() {
@@ -229,7 +318,7 @@ async function acceptSuggestion(id) {
 
   try {
     await replaceSuggestionText(suggestion);
-    dismissSuggestion(id);
+    await dismissSuggestion(id);
     setStatus("Suggestion applied.");
   } catch (error) {
     console.error(error);
@@ -270,45 +359,14 @@ async function replaceSuggestionText(suggestion) {
 }
 
 async function highlightSuggestionsInDocument(suggestions) {
-  if (!suggestions.length) {
-    return;
-  }
-
-  try {
-    await Word.run(async (context) => {
-      const paragraphs = context.document.body.paragraphs;
-      paragraphs.load("items");
-      await context.sync();
-
-      for (const suggestion of suggestions) {
-        const paragraph = paragraphs.items[suggestion.paragraphIndex];
-        const originalText = getOriginalText(suggestion);
-        if (!paragraph || !originalText) {
-          continue;
-        }
-
-        const matches = paragraph.search(originalText, {
-          matchCase: true,
-          matchWholeWord: false,
-        });
-        matches.load("items");
-        await context.sync();
-
-        const occurrenceIndex = countOccurrencesBefore(suggestion.paragraphText, originalText, suggestion.offset);
-        const target = matches.items[occurrenceIndex] || matches.items[0];
-        if (target) {
-          target.font.highlightColor = "Yellow";
-        }
-      }
-
-      await context.sync();
-    });
-  } catch (error) {
-    console.warn("Could not highlight suggestions in the document.", error);
-  }
+  await setSuggestionHighlights(suggestions, "Yellow");
 }
 
 async function clearHighlightsForSuggestions(suggestions) {
+  await setSuggestionHighlights(suggestions, null);
+}
+
+async function setSuggestionHighlights(suggestions, highlightColor) {
   if (!suggestions.length) {
     return;
   }
@@ -319,31 +377,55 @@ async function clearHighlightsForSuggestions(suggestions) {
       paragraphs.load("items");
       await context.sync();
 
-      for (const suggestion of suggestions) {
-        const paragraph = paragraphs.items[suggestion.paragraphIndex];
-        const originalText = getOriginalText(suggestion);
-        if (!paragraph || !originalText) {
+      const groupedSuggestions = groupSuggestionsByParagraph(suggestions);
+      const pendingHighlights = [];
+
+      for (const [paragraphIndex, paragraphSuggestions] of groupedSuggestions) {
+        const paragraph = paragraphs.items[paragraphIndex];
+        if (!paragraph) {
           continue;
         }
 
-        const matches = paragraph.search(originalText, {
-          matchCase: true,
-          matchWholeWord: false,
-        });
-        matches.load("items");
-        await context.sync();
+        const paragraphSearches = paragraphSuggestions
+          .map((suggestion) => {
+            const originalText = getOriginalText(suggestion);
+            if (!originalText) {
+              return null;
+            }
 
+            const matches = paragraph.search(originalText, {
+              matchCase: true,
+              matchWholeWord: false,
+            });
+            matches.load("items");
+
+            return { suggestion, originalText, matches };
+          })
+          .filter(Boolean);
+
+        for (const { suggestion, originalText, matches } of paragraphSearches) {
+          pendingHighlights.push({ suggestion, originalText, matches });
+        }
+      }
+
+      if (!pendingHighlights.length) {
+        return;
+      }
+
+      await context.sync();
+
+      for (const { suggestion, originalText, matches } of pendingHighlights) {
         const occurrenceIndex = countOccurrencesBefore(suggestion.paragraphText, originalText, suggestion.offset);
         const target = matches.items[occurrenceIndex] || matches.items[0];
         if (target) {
-          target.font.highlightColor = null;
+          target.font.highlightColor = highlightColor;
         }
       }
 
       await context.sync();
     });
   } catch (error) {
-    console.warn("Could not clear suggestion highlights.", error);
+    console.warn("Could not update suggestion highlights.", error);
   }
 }
 
@@ -361,10 +443,10 @@ function countOccurrencesBefore(text, searchText, offset) {
   return count;
 }
 
-function dismissSuggestion(id) {
+async function dismissSuggestion(id) {
   const suggestion = state.suggestions.find((item) => item.id === id);
   if (suggestion) {
-    clearHighlightsForSuggestions([suggestion]);
+    await clearHighlightsForSuggestions([suggestion]);
   }
   state.suggestions = state.suggestions.filter((suggestion) => suggestion.id !== id);
   render();
@@ -372,9 +454,89 @@ function dismissSuggestion(id) {
 
 async function acceptVisibleSuggestions() {
   const visible = getVisibleSuggestions();
-  for (const suggestion of visible) {
-    await acceptSuggestion(suggestion.id);
+  if (!visible.length) {
+    return;
   }
+
+  setStatus(`Applying ${visible.length} suggestion${visible.length === 1 ? "" : "s"}...`);
+
+  try {
+    await replaceSuggestionsTextBatch(visible);
+    const visibleIds = new Set(visible.map((suggestion) => suggestion.id));
+    state.suggestions = state.suggestions.filter((suggestion) => !visibleIds.has(suggestion.id));
+    if (state.latestSuggestionId && visibleIds.has(state.latestSuggestionId)) {
+      state.latestSuggestionId = null;
+    }
+    setStatus(`${visible.length} suggestion${visible.length === 1 ? "" : "s"} applied.`);
+    render();
+  } catch (error) {
+    console.error(error);
+    setStatus(error.message || "Could not apply visible suggestions.");
+  }
+}
+
+async function replaceSuggestionsTextBatch(suggestions) {
+  const groupedSuggestions = groupSuggestionsByParagraph(
+    suggestions
+      .filter((suggestion) => suggestion.selectedReplacement)
+      .sort((a, b) => {
+        if (a.paragraphIndex !== b.paragraphIndex) {
+          return a.paragraphIndex - b.paragraphIndex;
+        }
+        return b.offset - a.offset;
+      })
+  );
+
+  await Word.run(async (context) => {
+    const paragraphs = context.document.body.paragraphs;
+    paragraphs.load("items");
+    await context.sync();
+
+    for (const [paragraphIndex, paragraphSuggestions] of groupedSuggestions) {
+      const paragraph = paragraphs.items[paragraphIndex];
+      if (!paragraph) {
+        continue;
+      }
+
+      const pendingReplacements = [];
+      for (const suggestion of paragraphSuggestions) {
+        const originalText = getOriginalText(suggestion);
+        if (!originalText) {
+          continue;
+        }
+
+        const matches = paragraph.search(originalText, {
+          matchCase: true,
+          matchWholeWord: false,
+        });
+        matches.load("items");
+
+        pendingReplacements.push({
+          suggestion,
+          matches,
+          occurrenceIndex: countOccurrencesBefore(suggestion.paragraphText, originalText, suggestion.offset),
+        });
+      }
+
+      if (!pendingReplacements.length) {
+        continue;
+      }
+
+      await context.sync();
+
+      for (const { suggestion, matches, occurrenceIndex } of pendingReplacements) {
+        const target = matches.items[occurrenceIndex] || matches.items[0];
+        if (!target) {
+          continue;
+        }
+
+        target.font.highlightColor = null;
+        target.insertText(suggestion.selectedReplacement, Word.InsertLocation.replace);
+      }
+    }
+
+    await context.sync();
+  });
 }
 
 async function dismissVisibleSuggestions() {
@@ -395,28 +557,54 @@ function render() {
     tab.classList.toggle("active", tab.dataset.filter === state.activeFilter);
   });
 
-  const visible = getVisibleSuggestions();
-  els.acceptVisibleButton.disabled = state.scanning || visible.length === 0;
-  els.dismissVisibleButton.disabled = state.scanning || visible.length === 0;
+  const filtered = getFilteredSuggestions();
+  const pageCount = getPageCount(filtered.length);
+  state.currentPage = Math.max(1, Math.min(state.currentPage, pageCount));
+  const visible = getVisibleSuggestions(filtered);
+
+  els.acceptVisibleButton.disabled = visible.length === 0;
+  els.dismissVisibleButton.disabled = visible.length === 0;
 
   renderScore(counts.all);
-  renderSuggestions();
+  renderPagination(filtered.length, visible.length, pageCount);
+  renderSuggestions(visible);
 }
 
 function renderScore(total) {
   if (state.scanning) {
     els.scoreValue.textContent = "...";
     els.scoreLabel.textContent = "Scanning";
+    renderScanProgress();
     return;
   }
 
   const score = Math.max(0, 100 - total * 7);
   els.scoreValue.textContent = state.suggestions.length ? score : "--";
   els.scoreLabel.textContent = total ? "Needs review" : "Ready";
+  renderScanProgress();
 }
 
-function renderSuggestions() {
-  const visible = getVisibleSuggestions();
+function renderScanProgress() {
+  if (!els.scanProgress) {
+    return;
+  }
+
+  const progress = state.scanProgress;
+  const visible = Boolean(progress && progress.total > 0 && state.scanning);
+  els.scanProgress.classList.toggle("hidden", !visible);
+
+  if (!visible) {
+    return;
+  }
+
+  const percent = Math.min(100, Math.round((progress.current / progress.total) * 100));
+  els.scanProgressText.textContent = `${progress.current} of ${progress.total} paragraphs scanned`;
+  els.scanProgressPercent.textContent = `${percent}%`;
+  els.scanProgressBar.style.width = `${percent}%`;
+  els.scanProgressBar.setAttribute("aria-valuenow", String(percent));
+}
+
+function renderSuggestions(visible) {
 
   els.suggestionList.innerHTML = "";
   els.emptyState.classList.toggle("hidden", visible.length > 0);
@@ -426,17 +614,57 @@ function renderSuggestions() {
     fragment.appendChild(createSuggestionCard(suggestion));
   });
   els.suggestionList.appendChild(fragment);
+
+  revealLatestSuggestion();
 }
 
-function getVisibleSuggestions() {
+function getFilteredSuggestions() {
   return state.suggestions.filter((suggestion) => {
     return state.activeFilter === "all" || suggestion.type === state.activeFilter;
   });
 }
 
+function getVisibleSuggestions(filteredSuggestions = getFilteredSuggestions()) {
+  const start = (state.currentPage - 1) * SUGGESTIONS_PAGE_SIZE;
+  return filteredSuggestions.slice(start, start + SUGGESTIONS_PAGE_SIZE);
+}
+
+function getPageCount(totalSuggestions) {
+  return Math.max(1, Math.ceil(totalSuggestions / SUGGESTIONS_PAGE_SIZE));
+}
+
+function setPage(nextPage) {
+  const pageCount = getPageCount(getFilteredSuggestions().length);
+  const clampedPage = Math.max(1, Math.min(nextPage, pageCount));
+  if (clampedPage === state.currentPage) {
+    return;
+  }
+
+  state.currentPage = clampedPage;
+  render();
+}
+
+function renderPagination(filteredCount, visibleCount, pageCount) {
+  if (!els.pagination) {
+    return;
+  }
+
+  const shouldShow = filteredCount > SUGGESTIONS_PAGE_SIZE;
+  els.pagination.classList.toggle("hidden", !shouldShow);
+
+  const pageStart = filteredCount ? (state.currentPage - 1) * SUGGESTIONS_PAGE_SIZE + 1 : 0;
+  const pageEnd = filteredCount ? pageStart + visibleCount - 1 : 0;
+  els.pageInfo.textContent = `Page ${state.currentPage}/${pageCount} • ${pageStart}-${pageEnd} of ${filteredCount}`;
+
+  els.prevPageButton.disabled = state.currentPage <= 1;
+  els.nextPageButton.disabled = state.currentPage >= pageCount;
+}
+
 function createSuggestionCard(suggestion) {
   const card = document.createElement("article");
   card.className = "suggestion-card";
+  card.dataset.suggestionId = suggestion.id;
+  card.classList.toggle("new", suggestion.id === state.latestSuggestionId);
 
   const meta = document.createElement("div");
   meta.className = "suggestion-meta";
@@ -477,11 +705,24 @@ function createSuggestionCard(suggestion) {
   reject.className = "action reject";
   reject.type = "button";
   reject.textContent = "Reject";
-  reject.addEventListener("click", () => dismissSuggestion(suggestion.id));
+  reject.addEventListener("click", () => {
+    void dismissSuggestion(suggestion.id);
+  });
 
   actions.append(accept, reject);
   card.append(meta, context, message, replacementRow, actions);
   return card;
+}
+
+function revealLatestSuggestion() {
+  if (!state.scanning || !state.latestSuggestionId) {
+    return;
+  }
+
+  const card = els.suggestionList.querySelector(`[data-suggestion-id="${state.latestSuggestionId}"]`);
+  if (card) {
+    card.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }
 }
 
 function buildContextNodes(suggestion) {
@@ -551,4 +792,40 @@ function createId() {
 
   fallbackId += 1;
   return `suggestion-${Date.now()}-${fallbackId}`;
+}
+
+async function yieldToBrowser() {
+  return new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
+}
+
+function mapWithConcurrency(items, concurrency, mapper) {
+  const results = new Array(items.length);
+  const activeWorkers = Math.max(1, Math.min(concurrency, items.length));
+  let nextIndex = 0;
+
+  const workers = Array.from({ length: activeWorkers }, async () => {
+    while (nextIndex < items.length) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+      results[currentIndex] = await mapper(items[currentIndex], currentIndex);
+    }
+  });
+
+  return Promise.all(workers).then(() => results);
+}
+
+function groupSuggestionsByParagraph(suggestions) {
+  const grouped = new Map();
+
+  for (const suggestion of suggestions) {
+    if (!grouped.has(suggestion.paragraphIndex)) {
+      grouped.set(suggestion.paragraphIndex, []);
+    }
+
+    grouped.get(suggestion.paragraphIndex).push(suggestion);
+  }
+
+  return grouped;
 }

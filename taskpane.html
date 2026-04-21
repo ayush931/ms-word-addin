@@ -28,21 +28,72 @@
         <div class="score-copy">
           <strong id="scoreLabel">Ready</strong>
           <span id="statusText">Open a Word document and scan.</span>
+          <div
+            id="scanProgress"
+            class="scan-progress hidden"
+            aria-live="polite"
+          >
+            <div class="scan-progress-row">
+              <span id="scanProgressText">0 of 0 paragraphs scanned</span>
+              <span id="scanProgressPercent">0%</span>
+            </div>
+            <div class="scan-progress-track" aria-hidden="true">
+              <div id="scanProgressBar" class="scan-progress-bar"></div>
+            </div>
+          </div>
         </div>
       </section>
 
       <section class="quick-actions" aria-label="Suggestion actions">
-        <button id="acceptVisibleButton" class="action accept" type="button" disabled>Accept visible</button>
-        <button id="dismissVisibleButton" class="action reject" type="button" disabled>Dismiss visible</button>
+        <button
+          id="acceptVisibleButton"
+          class="action accept"
+          type="button"
+          disabled
+        >
+          Accept visible
+        </button>
+        <button
+          id="dismissVisibleButton"
+          class="action reject"
+          type="button"
+          disabled
+        >
+          Dismiss visible
+        </button>
       </section>
 
       <nav class="tabs" aria-label="Suggestion filters">
-        <button class="tab active" type="button" data-filter="all">All <span id="allCount">0</span></button>
-        <button class="tab" type="button" data-filter="spelling">Spelling <span id="spellingCount">0</span></button>
-        <button class="tab" type="button" data-filter="grammar">Grammar <span id="grammarCount">0</span></button>
+        <button class="tab active" type="button" data-filter="all">
+          All <span id="allCount">0</span>
+        </button>
+        <button class="tab" type="button" data-filter="spelling">
+          Spelling <span id="spellingCount">0</span>
+        </button>
+        <button class="tab" type="button" data-filter="grammar">
+          Grammar <span id="grammarCount">0</span>
+        </button>
       </nav>
 
-      <section id="suggestionList" class="suggestions" aria-live="polite"></section>
+      <section
+        id="pagination"
+        class="pagination hidden"
+        aria-label="Suggestion pages"
+      >
+        <button id="prevPageButton" class="action reject" type="button">
+          Previous
+        </button>
+        <span id="pageInfo">Page 1/1 • 0-0 of 0</span>
+        <button id="nextPageButton" class="action reject" type="button">
+          Next
+        </button>
+      </section>
+
+      <section
+        id="suggestionList"
+        class="suggestions"
+        aria-live="polite"
+      ></section>
 
       <section id="emptyState" class="empty-state">
         <div class="empty-mark" aria-hidden="true"></div>

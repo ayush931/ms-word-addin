@@ -4,8 +4,10 @@
   "private": true,
   "description": "A Microsoft Word add-in for grammar and spelling review.",
   "scripts": {
-    "start": "python -m http.server 3000",
-    "validate:manifest": "npx office-addin-manifest validate manifest.xml"
+    "certs": "npx --yes office-addin-dev-certs install",
+    "trust:certs": "certutil -user -addstore Root %USERPROFILE%\\.office-addin-dev-certs\\ca.crt",
+    "start": "npx --yes http-server -S -C %USERPROFILE%\\.office-addin-dev-certs\\localhost.crt -K %USERPROFILE%\\.office-addin-dev-certs\\localhost.key -p 3002",
+    "validate:manifest": "npx --yes office-addin-manifest validate manifest.xml"
   },
   "devDependencies": {}
 }

@@ -21,7 +21,7 @@ body {
   margin: 0;
   min-width: 300px;
   color: var(--ink);
-  font-family: "Segoe UI", Arial, sans-serif;
+  font-family: 'Segoe UI', Arial, sans-serif;
   background: var(--wash);
 }
 
@@ -37,9 +37,11 @@ button {
 
 .app-shell {
   display: flex;
+  height: 100vh;
   min-height: 100vh;
   flex-direction: column;
   gap: 10px;
+  overflow: hidden;
   padding: 12px;
 }
 
@@ -114,7 +116,7 @@ select {
   height: 6px;
   border-top: 2px solid currentColor;
   border-right: 2px solid currentColor;
-  content: "";
+  content: '';
   transform: rotate(35deg);
 }
 
@@ -153,6 +155,42 @@ button:disabled {
   min-width: 0;
 }
 
+.scan-progress {
+  display: grid;
+  gap: 5px;
+  margin-top: 2px;
+}
+
+.scan-progress.hidden {
+  display: none;
+}
+
+.scan-progress-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.scan-progress-track {
+  width: 100%;
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #dfe9e2;
+}
+
+.scan-progress-bar {
+  width: 0;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--green), #7fc39d);
+  transition: width 120ms linear;
+}
+
 .score-copy strong {
   font-size: 15px;
 }
@@ -171,6 +209,27 @@ button:disabled {
 .tabs {
   display: grid;
   gap: 6px;
+}
+
+.pagination {
+  display: grid;
+  grid-template-columns: 86px minmax(0, 1fr) 86px;
+  align-items: center;
+  gap: 6px;
+}
+
+.pagination.hidden {
+  display: none;
+}
+
+.pagination #pageInfo {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .quick-actions,
@@ -211,7 +270,12 @@ button:disabled {
 
 .suggestions {
   display: grid;
+  flex: 1 1 160px;
   gap: 8px;
+  min-height: 120px;
+  overflow-y: auto;
+  padding-right: 2px;
+  align-content: start;
 }
 
 .suggestion-card {
@@ -221,6 +285,11 @@ button:disabled {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--panel);
+}
+
+.suggestion-card.new {
+  border-color: #8fc7a5;
+  box-shadow: 0 0 0 2px rgba(20, 122, 80, 0.12);
 }
 
 .suggestion-meta {
@@ -331,7 +400,7 @@ button:disabled {
   height: 8px;
   border-bottom: 3px solid var(--green);
   border-left: 3px solid var(--green);
-  content: "";
+  content: '';
   transform: rotate(-45deg) translate(1px, -1px);
 }
 
