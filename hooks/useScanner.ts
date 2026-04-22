@@ -24,6 +24,7 @@ export function useScanner() {
   const [progress, setProgress] = useState<ScanProgress | null>(null);
   const [status, setStatus] = useState("Open a Word document and scan.");
   const [latestId, setLatestId] = useState<string | null>(null);
+  const [paragraphs, setParagraphs] = useState<ParagraphData[]>([]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -74,6 +75,7 @@ export function useScanner() {
       setIfMounted<string | null>(setLatestId, null);
 
       const paragraphs: ParagraphData[] = await readParagraphs();
+      setIfMounted(setParagraphs, paragraphs);
       const usable = paragraphs.filter((p) => p.text.trim().length > 0);
 
       if (!usable.length) {
@@ -120,8 +122,7 @@ export function useScanner() {
           safeSetSuggestions(sorted);
           setIfMounted<string | null>(setLatestId, flatResults[flatResults.length - 1].id);
           
-          // Apply highlights for this batch
-          await setSuggestionHighlights(flatResults, "Yellow");
+          // Selection will be handled when user clicks an item, avoiding permanent highlights
         }
         
         await yieldToBrowser();
@@ -154,6 +155,7 @@ export function useScanner() {
     status,
     setStatus: safeSetStatus,
     latestId,
+    paragraphs,
     startScan,
     stopScan,
   };

@@ -9,6 +9,7 @@ import { Tabs } from '../components/Tabs';
 import { Pagination } from '../components/Pagination';
 import { SuggestionList } from '../components/SuggestionList';
 import { Settings } from '../components/Settings';
+import { StatsPanel } from '../components/StatsPanel';
 
 // Hooks & Services
 import { useScanner } from '../hooks/useScanner';
@@ -37,6 +38,7 @@ export default function WritingAssistant() {
     status,
     setStatus,
     latestId,
+    paragraphs,
     startScan,
     stopScan,
   } = useScanner();
@@ -233,24 +235,33 @@ export default function WritingAssistant() {
         onFilterChange={setActiveFilter}
       />
 
-      <Pagination
-        currentPage={currentPage}
-        pageCount={pageCount}
-        totalCount={filteredSuggestions.length}
-        visibleCount={visibleSuggestions.length}
-        pageSize={SUGGESTIONS_PAGE_SIZE}
-        onPageChange={setCurrentPage}
-      />
+      {activeFilter === 'stats' ? (
+        <StatsPanel 
+          paragraphs={paragraphs} 
+          onStatusChange={setStatus} 
+        />
+      ) : (
+        <>
+          <Pagination
+            currentPage={currentPage}
+            pageCount={pageCount}
+            totalCount={filteredSuggestions.length}
+            visibleCount={visibleSuggestions.length}
+            pageSize={SUGGESTIONS_PAGE_SIZE}
+            onPageChange={setCurrentPage}
+          />
 
-      <SuggestionList
-        suggestions={visibleSuggestions}
-        scanning={scanning}
-        latestId={latestId}
-        onAccept={handleAccept}
-        onDismiss={handleDismiss}
-        onFocusSuggestion={handleFocusSuggestion}
-        onSelectReplacement={handleSelectReplacement}
-      />
+          <SuggestionList
+            suggestions={visibleSuggestions}
+            scanning={scanning}
+            latestId={latestId}
+            onAccept={handleAccept}
+            onDismiss={handleDismiss}
+            onFocusSuggestion={handleFocusSuggestion}
+            onSelectReplacement={handleSelectReplacement}
+          />
+        </>
+      )}
 
       <Settings
         onlineEnabled={onlineEnabled}

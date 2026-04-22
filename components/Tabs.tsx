@@ -17,6 +17,7 @@ export const Tabs: React.FC<TabsProps> = ({ activeFilter, counts, onFilterChange
     { id: 'style', label: 'Style', count: counts.style },
     { id: 'spelling', label: 'Spelling', count: counts.spelling },
     { id: 'grammar', label: 'Grammar', count: counts.grammar },
+    { id: 'stats', label: 'Stats', count: 0 },
   ];
 
   return (
