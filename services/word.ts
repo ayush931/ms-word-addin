@@ -2,6 +2,8 @@ import { Suggestion } from "../types/suggestion";
 import { groupSuggestionsByParagraph, countOccurrencesBefore } from "../utils/checks";
 import { AppError, ErrorCode, handleServiceError } from "../utils/errors";
 
+const WORD_SEARCH_MAX_LENGTH = 255;
+
 function getWordApi() {
   const word = (globalThis as typeof globalThis & { Word?: typeof Word }).Word;
   if (!word?.run) {
@@ -14,6 +16,14 @@ function getWordApi() {
 export interface ParagraphData {
   paragraphIndex: number;
   text: string;
+}
+
+function isValidWordSearchText(text: string): boolean {
+  if (!text) return false;
+  if (/^[\s\u00A0]+$/.test(text)) return false;
+  if (/[\r\n]/.test(text)) return false;
+  if (text.length > WORD_SEARCH_MAX_LENGTH) return false;
+  return true;
 }
 
 /**
@@ -71,8 +81,8 @@ export async function setSuggestionHighlights(suggestions: Suggestion[], highlig
 
         for (const s of pSuggestions) {
           const original = s.paragraphText.slice(s.offset, s.offset + s.length);
-          if (!original) continue;
-          
+          if (!isValidWordSearchText(original)) continue;
+
           const matches = paragraph.search(original, { matchCase: true, matchWholeWord: false });
           matches.load("items");
           pending.push({ s, original, matches });
@@ -104,6 +114,7 @@ export async function setSuggestionHighlights(suggestions: Suggestion[], highlig
 export async function selectSuggestionText(suggestion: Suggestion) {
   try {
     const original = suggestion.paragraphText.slice(suggestion.offset, suggestion.offset + suggestion.length);
+    const canSearchOriginal = isValidWordSearchText(original);
     const occIdx = countOccurrencesBefore(suggestion.paragraphText, original, suggestion.offset);
     const word = getWordApi();
 
@@ -115,7 +126,7 @@ export async function selectSuggestionText(suggestion: Suggestion) {
       const paragraph = paragraphs.items[suggestion.paragraphIndex];
       if (!paragraph) throw new AppError(ErrorCode.PARAGRAPH_CHANGED, "Paragraph changed. Please scan again.");
 
-      if (!original) {
+      if (!canSearchOriginal) {
         (paragraph as any).getRange().select();
         await context.sync();
         return;
@@ -149,6 +160,12 @@ export async function replaceSuggestionText(suggestion: Suggestion) {
 
   try {
     const original = suggestion.paragraphText.slice(suggestion.offset, suggestion.offset + suggestion.length);
+    if (!isValidWordSearchText(original)) {
+      throw new AppError(
+        ErrorCode.WORD_REPLACEMENT_FAILED,
+        "The selected text cannot be safely located in Word. Please review this suggestion manually."
+      );
+    }
     const occIdx = countOccurrencesBefore(suggestion.paragraphText, original, suggestion.offset);
     const word = getWordApi();
 
@@ -211,6 +228,7 @@ export async function replaceSuggestionsTextBatch(suggestions: Suggestion[]) {
         const pending: PendingReplacement[] = [];
         for (const s of pSuggestions) {
           const original = s.paragraphText.slice(s.offset, s.offset + s.length);
+          if (!isValidWordSearchText(original)) continue;
           const matches = paragraph.search(original, { matchCase: true, matchWholeWord: false });
           matches.load("items");
           pending.push({ s, matches, occIdx: countOccurrencesBefore(s.paragraphText, original, s.offset) });

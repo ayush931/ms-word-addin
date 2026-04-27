@@ -53,7 +53,7 @@ export default function WritingAssistant() {
   const [activeFilter, setActiveFilter] = useState('all');
   const [currentPage, setCurrentPage] = useState(1);
   const [onlineEnabled, setOnlineEnabled] = useState(true);
-  const [language, setLanguage] = useState("en-US");
+  const [language, setLanguage] = useState("en-GB");
   const autoScanStartedRef = useRef(false);
 
   // Initialize Office

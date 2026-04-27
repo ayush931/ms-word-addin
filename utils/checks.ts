@@ -24,6 +24,35 @@ const KNOWN_ABBREVIATIONS = new Set([
   "MRI", "NASA", "NLP", "PDF", "RNA", "URL", "XML", "JSON", "UI",
 ]);
 
+const MONTH_ALIASES: Record<string, string> = {
+  jan: "January",
+  january: "January",
+  feb: "February",
+  february: "February",
+  mar: "March",
+  march: "March",
+  apr: "April",
+  april: "April",
+  may: "May",
+  jun: "June",
+  june: "June",
+  jul: "July",
+  july: "July",
+  aug: "August",
+  august: "August",
+  sep: "September",
+  sept: "September",
+  september: "September",
+  oct: "October",
+  october: "October",
+  nov: "November",
+  november: "November",
+  dec: "December",
+  december: "December",
+};
+
+const MONTH_PATTERN = Object.keys(MONTH_ALIASES).sort((a, b) => b.length - a.length).join("|");
+
 // --- Main Entry Points ---
 
 /**
@@ -49,20 +78,19 @@ export function runLocalChecks(paragraph: ParagraphLike): Suggestion[] {
 /**
  * Comprehensive checks for consistency and professional styling.
  */
-export function runDocumentStyleChecks(paragraphs: ParagraphLike[]): Suggestion[] {
-  const fullText = paragraphs.map((p) => p.text).join("\n");
-  const variant = detectEnglishVariant(fullText);
-  const dateStyle = detectDateStyle(fullText);
+export function runDocumentStyleChecks(paragraphs: ParagraphLike[], language = "en-GB"): Suggestion[] {
+  const isUsStyle = language.toLowerCase().startsWith("en-us");
 
   return [
+    ...findTfUkIzeSpellingIssues(paragraphs),
     ...findDashConsistencyIssues(paragraphs),
-    ...findQuotationIssues(paragraphs, variant),
-    ...findQuotePunctuationIssues(paragraphs, variant),
+    ...findQuotationIssues(paragraphs, "uk"),
+    ...findQuotePunctuationIssues(paragraphs),
     ...findApostropheIssues(paragraphs),
     ...findHeadingIssues(paragraphs),
-    ...findDateConsistencyIssues(paragraphs, dateStyle),
+    ...findUkDateStyleIssues(paragraphs),
     ...findAbbreviationIssues(paragraphs),
-    ...findSerialCommaIssues(paragraphs),
+    ...findSerialCommaIssues(paragraphs, isUsStyle ? "us" : "uk"),
     ...findTableFigureNumberingIssues(paragraphs),
     ...findOperatorSpacingIssues(paragraphs),
   ];
@@ -70,12 +98,37 @@ export function runDocumentStyleChecks(paragraphs: ParagraphLike[]): Suggestion[
 
 // --- Check Implementations ---
 
+function findTfUkIzeSpellingIssues(paragraphs: ParagraphLike[]): Suggestion[] {
+  const issues: Suggestion[] = [];
+  for (const p of paragraphs) {
+    if (isSkippedParagraph(p.text)) continue;
+
+    const iseSuffixRegex = /\b([A-Za-z]{3,})(isations|isation|ysing|ysed|yses|yse|ising|ised|ises|ise)\b/g;
+    let match: RegExpExecArray | null;
+    while ((match = iseSuffixRegex.exec(p.text)) !== null) {
+      if (overlapsProtected(p.text, match.index, match.index + match[0].length)) continue;
+
+      const replacement = preserveCase(match[0], toOxfordIzeSpelling(match[0]));
+      if (replacement === match[0]) continue;
+
+      issues.push(createStyleSuggestion(
+        p,
+        match.index,
+        match[0].length,
+        "tf-uk-ize-spelling",
+        "Follow T&F UK (-ize) spelling.",
+        [replacement]
+      ));
+    }
+  }
+  return issues;
+}
+
 function findDashConsistencyIssues(paragraphs: ParagraphLike[]): Suggestion[] {
   const issues: Suggestion[] = [];
   for (const p of paragraphs) {
     if (isSkippedParagraph(p.text)) continue;
 
-    // 1. En Dash for Ranges
     const rangeRegex = /\b([A-Za-z]+|\d{1,4})(-)([A-Za-z]+|\d{1,4})\b/g;
     let match: RegExpExecArray | null;
     while ((match = rangeRegex.exec(p.text)) !== null) {
@@ -85,20 +138,18 @@ function findDashConsistencyIssues(paragraphs: ParagraphLike[]): Suggestion[] {
       const isProperNounPair = /^[A-Z]/.test(left) && /^[A-Z]/.test(right);
 
       if ((isRange || isNumeric || isProperNounPair) && !overlapsProtected(p.text, match.index, match.index + original.length)) {
-        issues.push(createStyleSuggestion(p, match.index, original.length, "en-dash-range", "Use an en dash (–) for ranges or related terms.", [`${left}–${right}`]));
+        issues.push(createStyleSuggestion(p, match.index, original.length, "en-dash-range", "Use an en dash for ranges or related terms.", [`${left}\u2013${right}`]));
       }
     }
 
-    // 2. Em Dash Spacing
-    const spacedEmDash = /\s+—\s+/g;
+    const spacedEmDash = /\s+\u2014\s+/g;
     while ((match = spacedEmDash.exec(p.text)) !== null) {
-      issues.push(createStyleSuggestion(p, match.index, match[0].length, "em-dash-spacing", "Em dashes should be unspaced.", ["—"]));
+      issues.push(createStyleSuggestion(p, match.index, match[0].length, "em-dash-spacing", "Em dashes should be unspaced.", ["\u2014"]));
     }
 
-    // 3. Double Hyphen to Em Dash
     const doubleHyphen = /([A-Za-z])--([A-Za-z])/g;
     while ((match = doubleHyphen.exec(p.text)) !== null) {
-      issues.push(createStyleSuggestion(p, match.index, match[0].length, "em-dash-substitution", "Use an em dash (—) instead of double hyphens.", [`${match[1]}—${match[2]}`]));
+      issues.push(createStyleSuggestion(p, match.index, match[0].length, "em-dash-substitution", "Use an em dash instead of double hyphens.", [`${match[1]}\u2014${match[2]}`]));
     }
   }
   return issues;
@@ -113,37 +164,35 @@ function findQuotationIssues(paragraphs: ParagraphLike[], variant: "us" | "uk"):
     let match: RegExpExecArray | null;
     while ((match = doubleRegex.exec(p.text)) !== null) {
       if (overlapsProtected(p.text, match.index, match.index + match[0].length)) continue;
-      issues.push(createStyleSuggestion(p, match.index, match[0].length, "quotation-style", variant === "us" ? "Use curly double quotes for primary quotes." : "Use curly double quotes for nested quotes.", [`“${match[1]}”`]));
+      issues.push(createStyleSuggestion(p, match.index, match[0].length, "quotation-style", variant === "us" ? "Use curly double quotes for primary quotes." : "Use curly double quotes for nested quotes.", [`\u201c${match[1]}\u201d`]));
     }
 
     const singleRegex = /(?<!\w)'([^'\n]+)'(?!\w)/g;
     while ((match = singleRegex.exec(p.text)) !== null) {
       if (overlapsProtected(p.text, match.index, match.index + match[0].length)) continue;
-      issues.push(createStyleSuggestion(p, match.index, match[0].length, "quotation-style", variant === "uk" ? "Use curly single quotes for primary quotes." : "Use curly single quotes for nested quotes.", [`‘${match[1]}’`]));
+      issues.push(createStyleSuggestion(p, match.index, match[0].length, "quotation-style", variant === "uk" ? "Use curly single quotes for primary quotes." : "Use curly single quotes for nested quotes.", [`\u2018${match[1]}\u2019`]));
     }
   }
   return issues;
 }
 
-function findQuotePunctuationIssues(paragraphs: ParagraphLike[], variant: "us" | "uk"): Suggestion[] {
+function findQuotePunctuationIssues(paragraphs: ParagraphLike[]): Suggestion[] {
   const issues: Suggestion[] = [];
   for (const p of paragraphs) {
     if (isSkippedParagraph(p.text)) continue;
 
-    if (variant === "us") {
-      const regex = /["'”’]([. , ; :])/g; // Punctuation outside
-      let match: RegExpExecArray | null;
-      while ((match = regex.exec(p.text)) !== null) {
-        if (overlapsProtected(p.text, match.index, match.index + match[0].length)) continue;
-        issues.push(createStyleSuggestion(p, match.index, 2, "quote-punctuation-us", "Place periods and commas inside quotation marks (US).", [`${match[1]}${match[0][0]}`]));
-      }
-    } else {
-      const regex = /([. , ; :])["'”’]/g; // Punctuation inside
-      let match: RegExpExecArray | null;
-      while ((match = regex.exec(p.text)) !== null) {
-        if (overlapsProtected(p.text, match.index, match.index + match[0].length)) continue;
-        issues.push(createStyleSuggestion(p, match.index, 2, "quote-punctuation-uk", "Place periods and commas outside quotation marks (UK).", [`${match[0][1]}${match[1]}`]));
-      }
+    const regex = /([.,;:!?])(["'\u201d\u2019])/g;
+    let match: RegExpExecArray | null;
+    while ((match = regex.exec(p.text)) !== null) {
+      if (overlapsProtected(p.text, match.index, match.index + match[0].length)) continue;
+      issues.push(createStyleSuggestion(
+        p,
+        match.index,
+        match[0].length,
+        "tf-quote-punctuation",
+        "Place punctuation outside quotation marks unless it belongs to the quoted material.",
+        [`${match[2]}${match[1]}`]
+      ));
     }
   }
   return issues;
@@ -157,7 +206,7 @@ function findApostropheIssues(paragraphs: ParagraphLike[]): Suggestion[] {
     let match: RegExpExecArray | null;
     while ((match = regex.exec(p.text)) !== null) {
       if (overlapsProtected(p.text, match.index, match.index + match[0].length)) continue;
-      issues.push(createStyleSuggestion(p, match.index, match[0].length, "smart-apostrophe", "Use a curly typographic apostrophe.", [match[0].replace(/'/g, "’")]));
+      issues.push(createStyleSuggestion(p, match.index, match[0].length, "smart-apostrophe", "Use a curly typographic apostrophe.", [match[0].replace(/'/g, "\u2019")]));
     }
   }
   return issues;
@@ -166,13 +215,12 @@ function findApostropheIssues(paragraphs: ParagraphLike[]): Suggestion[] {
 function findHeadingIssues(paragraphs: ParagraphLike[]): Suggestion[] {
   const issues: Suggestion[] = [];
   const headings = paragraphs.filter(p => isLikelyHeading(p.text));
-  
-  // Detect dominant casing
+
   let score = 0;
   headings.forEach(h => {
     const words = h.text.trim().split(/\s+/);
     const caps = words.filter(w => /^[A-Z]/.test(w)).length;
-    score += (caps > words.length / 2) ? 1 : -1;
+    score += caps > words.length / 2 ? 1 : -1;
   });
   const dominant = score >= 0 ? "title" : "sentence";
 
@@ -180,17 +228,15 @@ function findHeadingIssues(paragraphs: ParagraphLike[]): Suggestion[] {
     const text = p.text.trim();
     if (!text) continue;
 
-    // Running Head check
     if (p.paragraphIndex < 3 && text.length > 65 && !isLikelyHeading(text)) {
       issues.push(createStyleSuggestion(p, p.text.indexOf(text), text.length, "running-head-length", "Running head exceeds 65 characters.", [], false));
     }
 
     if (isLikelyHeading(text)) {
-      // Length check
       if (wordCount(text) > 60) {
         issues.push(createStyleSuggestion(p, p.text.indexOf(text), text.length, "heading-length", "Heading exceeds 60 words.", [], false));
       }
-      // Casing check
+
       const isTitle = text.split(/\s+/).filter(w => /^[A-Z]/.test(w)).length > wordCount(text) / 2;
       if (dominant === "title" && !isTitle) {
         issues.push(createStyleSuggestion(p, p.text.indexOf(text), text.length, "heading-casing", "Follow Title Case style.", [toTitleCase(text)], false));
@@ -199,7 +245,6 @@ function findHeadingIssues(paragraphs: ParagraphLike[]): Suggestion[] {
       }
     }
 
-    // Abstract check
     if (/^abstract:?$/i.test(text)) {
       const count = wordCount(getBlockAfterHeading(p.paragraphIndex, paragraphs));
       if (count < 150 || count > 200) {
@@ -210,17 +255,12 @@ function findHeadingIssues(paragraphs: ParagraphLike[]): Suggestion[] {
   return issues;
 }
 
-function findDateConsistencyIssues(paragraphs: ParagraphLike[], dominant: "us" | "uk"): Suggestion[] {
+function findUkDateStyleIssues(paragraphs: ParagraphLike[]): Suggestion[] {
   const issues: Suggestion[] = [];
   for (const p of paragraphs) {
     if (isSkippedParagraph(p.text)) continue;
 
-    const wrongRegex = dominant === "us" ? dayMonthRegex("g") : monthDateRegex("g");
-    let match: RegExpExecArray | null;
-    while ((match = wrongRegex.exec(p.text)) !== null) {
-      const replacement = dominant === "us" ? `${match[2]} ${Number(match[1])}, ${match[3]}` : `${Number(match[1])} ${match[2]} ${match[3]}`;
-      issues.push(createStyleSuggestion(p, match.index, match[0].length, "date-format", `Use dominant ${dominant.toUpperCase()} date style.`, [replacement]));
-    }
+    collectDateIssues(p).forEach(issue => issues.push(issue));
   }
   return issues;
 }
@@ -232,7 +272,6 @@ function findAbbreviationIssues(paragraphs: ParagraphLike[]): Suggestion[] {
   for (const p of paragraphs) {
     if (isSkippedParagraph(p.text)) continue;
 
-    // Definitions
     const defRegex = /\b([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+)+)\s*\(([A-Za-z]{2,})\)/g;
     let match: RegExpExecArray | null;
     while ((match = defRegex.exec(p.text)) !== null) {
@@ -243,7 +282,6 @@ function findAbbreviationIssues(paragraphs: ParagraphLike[]): Suggestion[] {
       }
     }
 
-    // Usage check
     const abbrRegex = /\b[A-Z]{2,}\b/g;
     while ((match = abbrRegex.exec(p.text)) !== null) {
       if (KNOWN_ABBREVIATIONS.has(match[0]) && !defined.has(match[0])) {
@@ -255,23 +293,28 @@ function findAbbreviationIssues(paragraphs: ParagraphLike[]): Suggestion[] {
   return issues;
 }
 
-function findSerialCommaIssues(paragraphs: ParagraphLike[]): Suggestion[] {
-  let serial = 0, noSerial = 0;
-  paragraphs.forEach(p => {
-    if (isSkippedParagraph(p.text)) return;
-    serial += countMatches(p.text, /\w+,\s+\w+,\s+and\s+\w+/g);
-    noSerial += countMatches(p.text, /\w+,\s+\w+\s+and\s+\w+/g);
-  });
-
-  const useSerial = serial >= noSerial;
+function findSerialCommaIssues(paragraphs: ParagraphLike[], style: "uk" | "us"): Suggestion[] {
   const issues: Suggestion[] = [];
   for (const p of paragraphs) {
     if (isSkippedParagraph(p.text)) continue;
-    const regex = useSerial ? /(\w+),\s+(\w+)\s+and\s+(\w+)/g : /(\w+),\s+(\w+),\s+and\s+(\w+)/g;
+    const regex = style === "us"
+      ? /(\b[A-Za-z][\w'-]*\b),\s+(\b[A-Za-z][\w'-]*\b)\s+(and|or)\s+(\b[A-Za-z][\w'-]*\b)/g
+      : /((?:\b[A-Za-z][\w'-]*\b,\s+){2,})(and|or)\s+(\b[A-Za-z][\w'-]*\b)/g;
     let match: RegExpExecArray | null;
     while ((match = regex.exec(p.text)) !== null) {
-      const fix = useSerial ? `${match[1]}, ${match[2]}, and ${match[3]}` : `${match[1]}, ${match[2]} and ${match[3]}`;
-      issues.push(createStyleSuggestion(p, match.index, match[0].length, "serial-comma", useSerial ? "Add serial comma." : "Remove serial comma.", [fix]));
+      const fix = style === "us"
+        ? `${match[1]}, ${match[2]}, ${match[3]} ${match[4]}`
+        : `${match[1].replace(/,\s+$/, " ")}${match[2]} ${match[3]}`;
+      issues.push(createStyleSuggestion(
+        p,
+        match.index,
+        match[0].length,
+        "tf-serial-comma",
+        style === "us"
+          ? "Add the serial comma for US style."
+          : "Remove the serial comma unless it is needed for clarity.",
+        [fix]
+      ));
     }
   }
   return issues;
@@ -401,20 +444,121 @@ function toSentenceCase(s: string): string {
   return t.charAt(0).toUpperCase() + t.slice(1);
 }
 
-function detectEnglishVariant(t: string): "us" | "uk" {
-  const us = countMatches(t, /\b(color|analyze|organization|behavior|center)\b/gi);
-  const uk = countMatches(t, /\b(colour|analyse|organisation|behaviour|centre)\b/gi);
-  return uk > us ? "uk" : "us";
+function toOxfordIzeSpelling(word: string): string {
+  return word
+    .replace(/isations$/i, "izations")
+    .replace(/isation$/i, "ization")
+    .replace(/ysing$/i, "yzing")
+    .replace(/ysed$/i, "yzed")
+    .replace(/yses$/i, "yzes")
+    .replace(/yse$/i, "yze")
+    .replace(/ising$/i, "izing")
+    .replace(/ised$/i, "ized")
+    .replace(/ises$/i, "izes")
+    .replace(/ise$/i, "ize");
 }
 
-function detectDateStyle(t: string): "us" | "uk" {
-  const us = countMatches(t, monthDateRegex("g"));
-  const uk = countMatches(t, dayMonthRegex("g"));
-  return uk > us ? "uk" : "us";
+function collectDateIssues(p: ParagraphLike): Suggestion[] {
+  const issues: Suggestion[] = [];
+  const occupied: Array<{ start: number; end: number }> = [];
+
+  const addIssue = (offset: number, original: string, replacement: string) => {
+    if (replacement === original || overlapsProtected(p.text, offset, offset + original.length)) return;
+    if (occupied.some(r => offset < r.end && offset + original.length > r.start)) return;
+    occupied.push({ start: offset, end: offset + original.length });
+    issues.push(createStyleSuggestion(
+      p,
+      offset,
+      original.length,
+      "tf-uk-date-format",
+      "Use UK date style: day month year, no ordinal suffixes or commas.",
+      [replacement]
+    ));
+  };
+
+  let match: RegExpExecArray | null;
+  const compactRangeRegex = new RegExp(`\\b(\\d{1,2})\\s*(?:-|\\u2013|\\u2014|to)\\s*(\\d{1,2})\\s+(${MONTH_PATTERN})\\.?\\s+('?[0-9]{2}|[0-9]{4})\\b`, "gi");
+  while ((match = compactRangeRegex.exec(p.text)) !== null) {
+    addIssue(match.index, match[0], `${Number(match[1])}\u2013${Number(match[2])} ${normalizeMonth(match[3])} ${normalizeYear(match[4])}`);
+  }
+
+  const monthFirstRangeRegex = new RegExp(`\\b(${MONTH_PATTERN})\\.?\\s+(\\d{1,2})\\s*(?:-|\\u2013|\\u2014|to)\\s*(\\d{1,2}),?\\s+('?[0-9]{2}|[0-9]{4})\\b`, "gi");
+  while ((match = monthFirstRangeRegex.exec(p.text)) !== null) {
+    addIssue(match.index, match[0], `${Number(match[2])}\u2013${Number(match[3])} ${normalizeMonth(match[1])} ${normalizeYear(match[4])}`);
+  }
+
+  const monthFirstRegex = new RegExp(`\\b(${MONTH_PATTERN})\\.?\\s+(\\d{1,2})(?:st|nd|rd|th)?,?\\s+('?[0-9]{2}|[0-9]{4})\\b`, "gi");
+  while ((match = monthFirstRegex.exec(p.text)) !== null) {
+    addIssue(match.index, match[0], `${Number(match[2])} ${normalizeMonth(match[1])} ${normalizeYear(match[3])}`);
+  }
+
+  const dayFirstRegex = new RegExp(`\\b(\\d{1,2})(?:st|nd|rd|th)?\\s+(${MONTH_PATTERN})\\.?[,]?\\s+('?[0-9]{2}|[0-9]{4})\\b`, "gi");
+  while ((match = dayFirstRegex.exec(p.text)) !== null) {
+    addIssue(match.index, match[0], `${Number(match[1])} ${normalizeMonth(match[2])} ${normalizeYear(match[3])}`);
+  }
+
+  const monthYearCommaRegex = new RegExp(`\\b(${MONTH_PATTERN})\\.?,\\s+(\\d{4})\\b`, "gi");
+  while ((match = monthYearCommaRegex.exec(p.text)) !== null) {
+    addIssue(match.index, match[0], `${normalizeMonth(match[1])} ${match[2]}`);
+  }
+
+  const numericDateRegex = /\b(\d{1,4})[\/.-](\d{1,2})[\/.-](\d{1,4})\b/g;
+  while ((match = numericDateRegex.exec(p.text)) !== null) {
+    const parsed = parseNumericDate(match[1], match[2], match[3]);
+    if (!parsed) continue;
+    addIssue(match.index, match[0], `${parsed.day} ${MONTHS[parsed.month - 1]} ${parsed.year}`);
+  }
+
+  return issues;
 }
 
-function monthDateRegex(f = ""): RegExp { return new RegExp(`\\b(${MONTHS.join("|")})\\s+(\\d{1,2}),\\s+(\\d{4})\\b`, f); }
-function dayMonthRegex(f = ""): RegExp { return new RegExp(`\\b(\\d{1,2})\\s+(${MONTHS.join("|")})\\s+(\\d{4})\\b`, f); }
+function parseNumericDate(aText: string, bText: string, cText: string): { day: number; month: number; year: string } | null {
+  const a = Number(aText);
+  const b = Number(bText);
+  const c = Number(cText);
+  let day: number;
+  let month: number;
+  let year: string;
+
+  if (aText.length === 4) {
+    year = aText;
+    month = b;
+    day = c;
+  } else {
+    year = normalizeYear(cText);
+    if (a > 12 && b <= 12) {
+      day = a;
+      month = b;
+    } else if (b > 12 && a <= 12) {
+      day = b;
+      month = a;
+    } else {
+      day = a;
+      month = b;
+    }
+  }
+
+  if (month < 1 || month > 12 || day < 1 || day > 31 || Number.isNaN(c)) return null;
+  return { day, month, year };
+}
+
+function normalizeMonth(month: string): string {
+  return MONTH_ALIASES[month.replace(/\.$/, "").toLowerCase()];
+}
+
+function normalizeYear(year: string): string {
+  const cleaned = year.replace(/^'/, "");
+  if (cleaned.length === 2) {
+    return Number(cleaned) < 50 ? `20${cleaned}` : `19${cleaned}`;
+  }
+  return cleaned;
+}
+
+function preserveCase(source: string, replacement: string): string {
+  if (source === source.toUpperCase()) return replacement.toUpperCase();
+  if (/^[A-Z]/.test(source)) return replacement.charAt(0).toUpperCase() + replacement.slice(1);
+  return replacement;
+}
 
 export function mergeSuggestions(remote: Suggestion[], local: Suggestion[]): Suggestion[] {
   const merged: Suggestion[] = [];
@@ -441,5 +585,3 @@ export function countOccurrencesBefore(text: string, search: string, offset: num
   while (idx !== -1 && idx < offset) { count++; idx = text.indexOf(search, idx + search.length); }
   return count;
 }
-
-function countMatches(t: string, r: RegExp): number { return Array.from(t.matchAll(r)).length; }

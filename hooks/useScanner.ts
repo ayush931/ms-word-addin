@@ -87,7 +87,7 @@ export function useScanner() {
       safeSetStatus(`Checking ${usable.length} paragraph${usable.length === 1 ? "" : "s"}...`);
 
       const allFound: Suggestion[] = [];
-      const styleSuggestions = runDocumentStyleChecks(paragraphs);
+      const styleSuggestions = runDocumentStyleChecks(paragraphs, language);
       const concurrency = onlineEnabled ? LANGUAGE_TOOL_CONCURRENCY : LOCAL_SCAN_CONCURRENCY;
 
       // Process in batches to update UI and apply highlights progressively

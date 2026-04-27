@@ -19,8 +19,8 @@ export const LOCAL_SCAN_CONCURRENCY = 4;
 
 /** Available languages for LanguageTool review */
 export const SUPPORTED_LANGUAGES = [
-  { value: "en-US", label: "English (US)" },
   { value: "en-GB", label: "English (UK)" },
+  { value: "en-US", label: "English (US)" },
   { value: "en-AU", label: "English (AU)" },
   { value: "en-CA", label: "English (CA)" },
 ];
