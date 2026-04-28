@@ -207,7 +207,10 @@ button:disabled {
 
 .quick-actions,
 .actions,
-.tabs {
+.tabs,
+.accept-all-page,
+.accept-all-header,
+.accept-all-list {
   display: grid;
   gap: 5px;
 }
@@ -240,7 +243,104 @@ button:disabled {
 }
 
 .tabs {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.accept-all-page {
+  flex: 1;
+  align-content: start;
+  gap: 10px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.accept-all-header {
+  gap: 3px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.accept-all-header strong {
+  font-size: 15px;
+  line-height: 1.2;
+}
+
+.accept-all-header span {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.accept-all-list {
+  gap: 8px;
+}
+
+.accept-all-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 34px;
+  align-items: center;
+  gap: 8px;
+  min-height: 48px;
+  padding: 8px 10px;
+  border: 1px solid #b7d8c4;
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--ink);
+  cursor: pointer;
+  text-align: left;
+}
+
+.accept-all-primary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 42px;
+  align-items: center;
+  gap: 8px;
+  min-height: 52px;
+  padding: 9px 11px;
+  border: 1px solid var(--green);
+  border-radius: 8px;
+  background: var(--green);
+  color: #fff;
+  cursor: pointer;
+  text-align: left;
+}
+
+.accept-all-primary span {
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.25;
+}
+
+.accept-all-primary strong {
+  display: grid;
+  min-width: 32px;
+  height: 32px;
+  place-items: center;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.18);
+  color: #fff;
+  font-size: 13px;
+}
+
+.accept-all-item span {
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.accept-all-item strong {
+  display: grid;
+  min-width: 28px;
+  height: 28px;
+  place-items: center;
+  border-radius: 999px;
+  background: #eef8f2;
+  color: var(--green-strong);
+  font-size: 12px;
 }
 
 .tab {

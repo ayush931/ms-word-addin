@@ -12,12 +12,13 @@ interface TabsProps {
  * Filter tabs to toggle between issue sections.
  */
 export const Tabs: React.FC<TabsProps> = ({ activeFilter, counts, onFilterChange }) => {
-  const filters = [
+  const filters: Array<{ id: string; label: string; count?: number }> = [
     { id: 'all', label: 'All', count: counts.all },
     { id: 'style', label: 'Style', count: counts.style },
     { id: 'spelling', label: 'Spelling', count: counts.spelling },
     { id: 'grammar', label: 'Grammar', count: counts.grammar },
-    { id: 'stats', label: 'Stats', count: 0 },
+    { id: 'acceptAll', label: 'Accept All' },
+    { id: 'stats', label: 'Stats' },
   ];
 
   return (
@@ -29,7 +30,7 @@ export const Tabs: React.FC<TabsProps> = ({ activeFilter, counts, onFilterChange
           type="button" 
           onClick={() => onFilterChange(f.id)}
         >
-          {f.label} <span>{f.count}</span>
+          {f.label} {typeof f.count === "number" && <span>{f.count}</span>}
         </button>
       ))}
     </nav>

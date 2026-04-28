@@ -25,6 +25,53 @@ import { SUGGESTIONS_PAGE_SIZE } from '../constants/config';
 import { Suggestion } from '../types/suggestion';
 import { getFriendlyErrorMessage } from '../utils/errors';
 
+const STATIC_BULK_RULES = [
+  { ruleId: "tf-uk-ize-spelling", label: "UK -ize style" },
+  { ruleId: "tf-serial-comma", label: "Serial comma" },
+  { ruleId: "tf-uk-date-format", label: "UK dates" },
+  { ruleId: "tf-quote-punctuation", label: "Quote punctuation" },
+  { ruleId: "en-dash-range", label: "En dash ranges" },
+  { ruleId: "em-dash-spacing", label: "Em dash spacing" },
+  { ruleId: "em-dash-substitution", label: "Double hyphen to em dash" },
+  { ruleId: "quotation-style", label: "Quotation style" },
+  { ruleId: "smart-apostrophe", label: "Smart apostrophes" },
+  { ruleId: "abbr-spacing", label: "Abbreviation spacing" },
+  { ruleId: "seq", label: "Table and figure numbering" },
+  { ruleId: "math-space", label: "Math operator spacing" },
+  { ruleId: "local-typo", label: "Common typos" },
+  { ruleId: "local-one-space", label: "Extra spaces" },
+  { ruleId: "local-repeated-word", label: "Repeated words" },
+  { ruleId: "local-pronoun-i", label: "Lowercase pronoun I" },
+  { ruleId: "local-space-before-punctuation", label: "Space before punctuation" },
+  { ruleId: "local-repeated-punctuation", label: "Repeated punctuation" },
+  { ruleId: "local-space-after-punctuation", label: "Space after punctuation" },
+  { ruleId: "local-space-after-period", label: "Space after period" },
+];
+
+function getNonOverlappingSuggestions(suggestions: Suggestion[]) {
+  const accepted: Suggestion[] = [];
+  const occupiedByParagraph = new Map<number, Array<{ start: number; end: number }>>();
+
+  [...suggestions]
+    .sort((a, b) => {
+      if (a.paragraphIndex !== b.paragraphIndex) return a.paragraphIndex - b.paragraphIndex;
+      if (a.offset !== b.offset) return a.offset - b.offset;
+      return a.length - b.length;
+    })
+    .forEach((suggestion) => {
+      const ranges = occupiedByParagraph.get(suggestion.paragraphIndex) || [];
+      const start = suggestion.offset;
+      const end = suggestion.offset + suggestion.length;
+      if (ranges.some((range) => start < range.end && end > range.start)) return;
+
+      ranges.push({ start, end });
+      occupiedByParagraph.set(suggestion.paragraphIndex, ranges);
+      accepted.push(suggestion);
+    });
+
+  return accepted;
+}
+
 /**
  * Main Taskpane Entry Point.
  * Manages global state and orchestrates components.
@@ -115,6 +162,22 @@ export default function WritingAssistant() {
     () => visibleSuggestions.filter((s) => s.autoFixable !== false && s.selectedReplacement).length,
     [visibleSuggestions]
   );
+  const bulkIssueCounts = useMemo(() => {
+    return STATIC_BULK_RULES.reduce<Record<string, number>>((acc, action) => {
+      acc[action.ruleId] = suggestions.filter(
+        (s) => s.ruleId === action.ruleId && s.autoFixable !== false && s.selectedReplacement
+      ).length;
+      return acc;
+    }, {});
+  }, [suggestions]);
+  const staticFixableSuggestions = useMemo(() => {
+    const staticRuleIds = new Set(STATIC_BULK_RULES.map((action) => action.ruleId));
+    return getNonOverlappingSuggestions(
+      suggestions.filter(
+        (s) => s.ruleId && staticRuleIds.has(s.ruleId) && s.autoFixable !== false && s.selectedReplacement
+      )
+    );
+  }, [suggestions]);
 
   const pageCount = Math.max(1, Math.ceil(filteredSuggestions.length / SUGGESTIONS_PAGE_SIZE));
   const score = suggestions.length ? Math.max(0, 100 - counts.all * 7) : "--";
@@ -166,14 +229,60 @@ export default function WritingAssistant() {
     if (!fixableSuggestions.length) return;
     try {
       setStatus(`Processing ${fixableSuggestions.length} items...`);
-      await replaceSuggestionsTextBatch(fixableSuggestions);
-      const visibleIds = new Set(fixableSuggestions.map(s => s.id));
-      setSuggestions(prev => prev.filter(s => !visibleIds.has(s.id)));
-      setStatus("Batch update complete.");
+      const appliedIds = new Set(await replaceSuggestionsTextBatch(fixableSuggestions));
+      setSuggestions(prev => prev.filter(s => !appliedIds.has(s.id)));
+      setStatus(
+        appliedIds.size === fixableSuggestions.length
+          ? "Batch update complete."
+          : `Applied ${appliedIds.size} of ${fixableSuggestions.length}. Scan again for any changed text.`
+      );
     } catch (err: any) {
       setStatus(getFriendlyErrorMessage(err));
     }
   }, [visibleSuggestions, setSuggestions, setStatus]);
+
+  const handleAcceptIssueType = useCallback(async (ruleId: string) => {
+    const fixableSuggestions = suggestionsRef.current.filter(
+      (s) => s.ruleId === ruleId && s.autoFixable !== false && s.selectedReplacement
+    );
+    if (!fixableSuggestions.length) return;
+
+    try {
+      setStatus(`Processing ${fixableSuggestions.length} ${fixableSuggestions.length === 1 ? "issue" : "issues"}...`);
+      const appliedIds = new Set(await replaceSuggestionsTextBatch(fixableSuggestions));
+      setSuggestions(prev => prev.filter(s => !appliedIds.has(s.id)));
+      setStatus(
+        appliedIds.size === fixableSuggestions.length
+          ? "Accept all complete."
+          : `Applied ${appliedIds.size} of ${fixableSuggestions.length}. Scan again for any changed text.`
+      );
+    } catch (err: any) {
+      setStatus(getFriendlyErrorMessage(err));
+    }
+  }, [setSuggestions, setStatus]);
+
+  const handleAcceptStaticFixes = useCallback(async () => {
+    const staticRuleIds = new Set(STATIC_BULK_RULES.map((action) => action.ruleId));
+    const fixableSuggestions = getNonOverlappingSuggestions(
+      suggestionsRef.current.filter(
+        (s) => s.ruleId && staticRuleIds.has(s.ruleId) && s.autoFixable !== false && s.selectedReplacement
+      )
+    );
+    if (!fixableSuggestions.length) return;
+
+    try {
+      setStatus(`Processing ${fixableSuggestions.length} static ${fixableSuggestions.length === 1 ? "fix" : "fixes"}...`);
+      const appliedIds = new Set(await replaceSuggestionsTextBatch(fixableSuggestions));
+      setSuggestions(prev => prev.filter(s => !appliedIds.has(s.id)));
+      setStatus(
+        appliedIds.size === fixableSuggestions.length
+          ? "All static fixes applied."
+          : `Applied ${appliedIds.size} of ${fixableSuggestions.length}. Scan again for any changed text.`
+      );
+    } catch (err: any) {
+      setStatus(getFriendlyErrorMessage(err));
+    }
+  }, [setSuggestions, setStatus]);
 
   const handleDismissVisible = useCallback(async () => {
     if (!visibleSuggestions.length) return;
@@ -240,6 +349,39 @@ export default function WritingAssistant() {
           paragraphs={paragraphs} 
           onStatusChange={setStatus} 
         />
+      ) : activeFilter === 'acceptAll' ? (
+        <section className="accept-all-page" aria-label="Accept all by issue">
+          <div className="accept-all-header">
+            <strong>Accept all fixes</strong>
+            <span>Apply deterministic fix groups across the document.</span>
+          </div>
+          <button
+            className="accept-all-primary"
+            type="button"
+            disabled={staticFixableSuggestions.length === 0 || scanning}
+            onClick={handleAcceptStaticFixes}
+          >
+            <span>Accept all static fixes</span>
+            <strong>{staticFixableSuggestions.length}</strong>
+          </button>
+          <div className="accept-all-list">
+            {STATIC_BULK_RULES.map((action) => {
+              const count = bulkIssueCounts[action.ruleId] || 0;
+              return (
+                <button
+                  key={action.ruleId}
+                  className="accept-all-item"
+                  type="button"
+                  disabled={count === 0 || scanning}
+                  onClick={() => handleAcceptIssueType(action.ruleId)}
+                >
+                  <span>{action.label}</span>
+                  <strong>{count}</strong>
+                </button>
+              );
+            })}
+          </div>
+        </section>
       ) : (
         <>
           <Pagination

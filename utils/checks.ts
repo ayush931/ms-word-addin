@@ -52,6 +52,14 @@ const MONTH_ALIASES: Record<string, string> = {
 };
 
 const MONTH_PATTERN = Object.keys(MONTH_ALIASES).sort((a, b) => b.length - a.length).join("|");
+const OXFORD_IZE_SUFFIX_PATTERN = [
+  "isations", "isation",
+  "ysing", "ysed", "yses", "yse",
+  "(?:al|ar|as|at|ct|er|gn|ic|il|in|it|iv|or)ising",
+  "(?:al|ar|as|at|ct|er|gn|ic|il|in|it|iv|or)ised",
+  "(?:al|ar|as|at|ct|er|gn|ic|il|in|it|iv|or)ises",
+  "(?:al|ar|as|at|ct|er|gn|ic|il|in|it|iv|or)ise",
+].join("|");
 
 // --- Main Entry Points ---
 
@@ -60,18 +68,18 @@ const MONTH_PATTERN = Object.keys(MONTH_ALIASES).sort((a, b) => b.length - a.len
  */
 export function runLocalChecks(paragraph: ParagraphLike): Suggestion[] {
   return [
-    ...findRegexIssues(paragraph, /\b(teh)\b/gi, "spelling", "Possible spelling mistake.", ["the"]),
-    ...findRegexIssues(paragraph, /\b(recieve|recieved|recieving)\b/gi, "spelling", "Possible spelling mistake.", ["receive"]),
-    ...findRegexIssues(paragraph, /\b(seperate|seperated|seperately)\b/gi, "spelling", "Possible spelling mistake.", ["separate"]),
-    ...findRegexIssues(paragraph, /\b(definately)\b/gi, "spelling", "Possible spelling mistake.", ["definitely"]),
-    ...findRegexIssues(paragraph, /\b(alot)\b/gi, "spelling", "Possible spelling mistake.", ["a lot"]),
-    ...findRegexIssues(paragraph, / {2,}/g, "grammar", "Use one space.", [" "]),
-    ...findRegexIssues(paragraph, /\b(\w+)\s+\1\b/gi, "grammar", "Repeated word.", ["$1"]),
-    ...findRegexIssues(paragraph, /\b(i)\b/g, "grammar", "Capitalize the pronoun.", ["I"]),
-    ...findRegexIssues(paragraph, /\s+([,.!?;:])/g, "grammar", "Remove the space before punctuation.", ["$1"]),
-    ...findRegexIssues(paragraph, /([!?]){2,}/g, "grammar", "Use one punctuation mark.", ["$1"]),
-    ...findRegexIssues(paragraph, /([,;:!?])(?=\S)/g, "grammar", "Add a space after punctuation.", ["$1 "]),
-    ...findRegexIssues(paragraph, /([A-Za-z]{3,}\.)(?=[A-Z][a-z])/g, "grammar", "Add a space after the period.", ["$1 "]),
+    ...findRegexIssues(paragraph, /\b(teh)\b/gi, "spelling", "Possible spelling mistake.", ["the"], "local-typo"),
+    ...findRegexIssues(paragraph, /\b(recieve|recieved|recieving)\b/gi, "spelling", "Possible spelling mistake.", ["receive"], "local-typo"),
+    ...findRegexIssues(paragraph, /\b(seperate|seperated|seperately)\b/gi, "spelling", "Possible spelling mistake.", ["separate"], "local-typo"),
+    ...findRegexIssues(paragraph, /\b(definately)\b/gi, "spelling", "Possible spelling mistake.", ["definitely"], "local-typo"),
+    ...findRegexIssues(paragraph, /\b(alot)\b/gi, "spelling", "Possible spelling mistake.", ["a lot"], "local-typo"),
+    ...findRegexIssues(paragraph, / {2,}/g, "grammar", "Use one space.", [" "], "local-one-space"),
+    ...findRegexIssues(paragraph, /\b(\w+)\s+\1\b/gi, "grammar", "Repeated word.", ["$1"], "local-repeated-word"),
+    ...findRegexIssues(paragraph, /\b(i)\b/g, "grammar", "Capitalize the pronoun.", ["I"], "local-pronoun-i"),
+    ...findRegexIssues(paragraph, /\s+([,.!?;:])/g, "grammar", "Remove the space before punctuation.", ["$1"], "local-space-before-punctuation"),
+    ...findRegexIssues(paragraph, /([!?]){2,}/g, "grammar", "Use one punctuation mark.", ["$1"], "local-repeated-punctuation"),
+    ...findRegexIssues(paragraph, /([,;:!?])(?=\S)/g, "grammar", "Add a space after punctuation.", ["$1 "], "local-space-after-punctuation"),
+    ...findRegexIssues(paragraph, /([A-Za-z]{3,}\.)(?=[A-Z][a-z])/g, "grammar", "Add a space after the period.", ["$1 "], "local-space-after-period"),
   ];
 }
 
@@ -79,8 +87,6 @@ export function runLocalChecks(paragraph: ParagraphLike): Suggestion[] {
  * Comprehensive checks for consistency and professional styling.
  */
 export function runDocumentStyleChecks(paragraphs: ParagraphLike[], language = "en-GB"): Suggestion[] {
-  const isUsStyle = language.toLowerCase().startsWith("en-us");
-
   return [
     ...findTfUkIzeSpellingIssues(paragraphs),
     ...findDashConsistencyIssues(paragraphs),
@@ -90,7 +96,7 @@ export function runDocumentStyleChecks(paragraphs: ParagraphLike[], language = "
     ...findHeadingIssues(paragraphs),
     ...findUkDateStyleIssues(paragraphs),
     ...findAbbreviationIssues(paragraphs),
-    ...findSerialCommaIssues(paragraphs, isUsStyle ? "us" : "uk"),
+    ...findSerialCommaIssues(paragraphs),
     ...findTableFigureNumberingIssues(paragraphs),
     ...findOperatorSpacingIssues(paragraphs),
   ];
@@ -103,7 +109,7 @@ function findTfUkIzeSpellingIssues(paragraphs: ParagraphLike[]): Suggestion[] {
   for (const p of paragraphs) {
     if (isSkippedParagraph(p.text)) continue;
 
-    const iseSuffixRegex = /\b([A-Za-z]{3,})(isations|isation|ysing|ysed|yses|yse|ising|ised|ises|ise)\b/g;
+    const iseSuffixRegex = new RegExp(`\\b[A-Za-z]{3,}(?:${OXFORD_IZE_SUFFIX_PATTERN})\\b`, "gi");
     let match: RegExpExecArray | null;
     while ((match = iseSuffixRegex.exec(p.text)) !== null) {
       if (overlapsProtected(p.text, match.index, match.index + match[0].length)) continue;
@@ -116,7 +122,7 @@ function findTfUkIzeSpellingIssues(paragraphs: ParagraphLike[]): Suggestion[] {
         match.index,
         match[0].length,
         "tf-uk-ize-spelling",
-        "Follow T&F UK (-ize) spelling.",
+        "Follow UK -ize spelling style.",
         [replacement]
       ));
     }
@@ -293,27 +299,20 @@ function findAbbreviationIssues(paragraphs: ParagraphLike[]): Suggestion[] {
   return issues;
 }
 
-function findSerialCommaIssues(paragraphs: ParagraphLike[], style: "uk" | "us"): Suggestion[] {
+function findSerialCommaIssues(paragraphs: ParagraphLike[]): Suggestion[] {
   const issues: Suggestion[] = [];
   for (const p of paragraphs) {
     if (isSkippedParagraph(p.text)) continue;
-    const regex = style === "us"
-      ? /(\b[A-Za-z][\w'-]*\b),\s+(\b[A-Za-z][\w'-]*\b)\s+(and|or)\s+(\b[A-Za-z][\w'-]*\b)/g
-      : /((?:\b[A-Za-z][\w'-]*\b,\s+){2,})(and|or)\s+(\b[A-Za-z][\w'-]*\b)/g;
+    const regex = /(\b[A-Za-z][\w'-]*\b),\s+(\b[A-Za-z][\w'-]*\b)\s+(and|or)\s+(\b[A-Za-z][\w'-]*\b)/g;
     let match: RegExpExecArray | null;
     while ((match = regex.exec(p.text)) !== null) {
-      const fix = style === "us"
-        ? `${match[1]}, ${match[2]}, ${match[3]} ${match[4]}`
-        : `${match[1].replace(/,\s+$/, " ")}${match[2]} ${match[3]}`;
       issues.push(createStyleSuggestion(
         p,
         match.index,
         match[0].length,
         "tf-serial-comma",
-        style === "us"
-          ? "Add the serial comma for US style."
-          : "Remove the serial comma unless it is needed for clarity.",
-        [fix]
+        "Add the serial comma wherever needed for list clarity.",
+        [`${match[1]}, ${match[2]}, ${match[3]} ${match[4]}`]
       ));
     }
   }
@@ -359,7 +358,7 @@ function findOperatorSpacingIssues(paragraphs: ParagraphLike[]): Suggestion[] {
 
 // --- Helpers ---
 
-function findRegexIssues(p: ParagraphLike, regex: RegExp, type: SuggestionType, message: string, replacements: string[]): Suggestion[] {
+function findRegexIssues(p: ParagraphLike, regex: RegExp, type: SuggestionType, message: string, replacements: string[], ruleId?: string): Suggestion[] {
   const issues: Suggestion[] = [];
   let match: RegExpExecArray | null;
   while ((match = regex.exec(p.text)) !== null) {
@@ -371,6 +370,7 @@ function findRegexIssues(p: ParagraphLike, regex: RegExp, type: SuggestionType, 
       offset: match.index,
       length: match[0].length,
       type,
+      ruleId,
       message,
       replacements: fixed,
       selectedReplacement: fixed[0] || "",

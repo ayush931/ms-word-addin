@@ -202,12 +202,13 @@ interface PendingReplacement {
 /**
  * Replaces multiple suggestions in one operation for better performance.
  */
-export async function replaceSuggestionsTextBatch(suggestions: Suggestion[]) {
+export async function replaceSuggestionsTextBatch(suggestions: Suggestion[]): Promise<string[]> {
   const fixableSuggestions = suggestions.filter((s) => s.autoFixable !== false && s.selectedReplacement);
-  if (!fixableSuggestions.length) return;
+  if (!fixableSuggestions.length) return [];
 
   try {
     const word = getWordApi();
+    const appliedIds: string[] = [];
     const grouped = groupSuggestionsByParagraph(
       [...fixableSuggestions].sort((a, b) => {
         if (a.paragraphIndex !== b.paragraphIndex) return a.paragraphIndex - b.paragraphIndex;
@@ -241,11 +242,14 @@ export async function replaceSuggestionsTextBatch(suggestions: Suggestion[]) {
           if (target) {
             target.font.highlightColor = null as any;
             target.insertText(s.selectedReplacement!, word.InsertLocation.replace);
+            appliedIds.push(s.id);
           }
         }
       }
       await context.sync();
     });
+
+    return appliedIds;
   } catch (error) {
     return handleServiceError(error, ErrorCode.WORD_REPLACEMENT_FAILED);
   }
