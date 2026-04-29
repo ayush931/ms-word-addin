@@ -487,14 +487,20 @@ function collectDateIssues(p: ParagraphLike): Suggestion[] {
     addIssue(match.index, match[0], `${Number(match[2])}\u2013${Number(match[3])} ${normalizeMonth(match[1])} ${normalizeYear(match[4])}`);
   }
 
-  const monthFirstRegex = new RegExp(`\\b(${MONTH_PATTERN})\\.?\\s+(\\d{1,2})(?:st|nd|rd|th)?,?\\s+('?[0-9]{2}|[0-9]{4})\\b`, "gi");
+  const monthFirstRegex = new RegExp(`\\b(${MONTH_PATTERN})\\.?\\s+(\\d{1,2})(?:st|nd|rd|th)?(?:[,]?[\\s\\u00A0]+('?[0-9]{2}|[0-9]{4}))?\\b`, "gi");
   while ((match = monthFirstRegex.exec(p.text)) !== null) {
-    addIssue(match.index, match[0], `${Number(match[2])} ${normalizeMonth(match[1])} ${normalizeYear(match[3])}`);
+    const month = normalizeMonth(match[1]);
+    const day = Number(match[2]);
+    const year = match[3] ? ` ${normalizeYear(match[3])}` : "";
+    addIssue(match.index, match[0], `${day} ${month}${year}`);
   }
 
-  const dayFirstRegex = new RegExp(`\\b(\\d{1,2})(?:st|nd|rd|th)?\\s+(${MONTH_PATTERN})\\.?[,]?\\s+('?[0-9]{2}|[0-9]{4})\\b`, "gi");
+  const dayFirstRegex = new RegExp(`\\b(\\d{1,2})(?:st|nd|rd|th)?(?:\\s+of)?\\s+(${MONTH_PATTERN})\\.?(?:[,]?[\\s\\u00A0]+('?[0-9]{2}|[0-9]{4}))?\\b`, "gi");
   while ((match = dayFirstRegex.exec(p.text)) !== null) {
-    addIssue(match.index, match[0], `${Number(match[1])} ${normalizeMonth(match[2])} ${normalizeYear(match[3])}`);
+    const day = Number(match[1]);
+    const month = normalizeMonth(match[2]);
+    const year = match[3] ? ` ${normalizeYear(match[3])}` : "";
+    addIssue(match.index, match[0], `${day} ${month}${year}`);
   }
 
   const monthYearCommaRegex = new RegExp(`\\b(${MONTH_PATTERN})\\.?,\\s+(\\d{4})\\b`, "gi");
@@ -547,6 +553,7 @@ function normalizeMonth(month: string): string {
 }
 
 function normalizeYear(year: string): string {
+  if (!year) return "";
   const cleaned = year.replace(/^'/, "");
   if (cleaned.length === 2) {
     return Number(cleaned) < 50 ? `20${cleaned}` : `19${cleaned}`;
