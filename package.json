@@ -4,7 +4,7 @@
   "private": true,
   "description": "A Microsoft Word add-in for grammar and spelling review.",
   "scripts": {
-    "dev": "next dev --port 3000 --experimental-https --experimental-https-key \"%USERPROFILE%\\.office-addin-dev-certs\\localhost.key\" --experimental-https-cert \"%USERPROFILE%\\.office-addin-dev-certs\\localhost.crt\" --experimental-https-ca \"%USERPROFILE%\\.office-addin-dev-certs\\ca.crt\"",
+    "dev": "next dev --port 3000 --experimental-https --experimental-https-key $HOME/.office-addin-dev-certs/localhost.key --experimental-https-cert $HOME/.office-addin-dev-certs/localhost.crt",
     "build": "next build",
     "start": "npm run dev",
     "typecheck": "tsc --noEmit",
@@ -15,15 +15,15 @@
     "update": "git pull && npm install"
   },
   "dependencies": {
-    "next": "^16.2.4",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "next": "16.2.6",
+    "react": "19.2.6",
+    "react-dom": "19.2.6"
   },
   "devDependencies": {
-    "@types/node": "^20.12.7",
-    "@types/office-js": "^1.0.380",
-    "@types/react": "^18.2.78",
-    "@types/react-dom": "^18.2.25",
-    "typescript": "^5.4.5"
+    "@types/node": "25.8.0",
+    "@types/office-js": "1.0.591",
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3",
+    "typescript": "6.0.3"
   }
 }
